@@ -21,12 +21,15 @@ function localNow(tz) {
 }
 
 const stores = must(await sb.from("stores").select("*"));
+console.log(`${stores.length} store(s) found${force ? " (sending now, ignoring the hour)" : ""}`);
 let sent = 0;
 for (const st of stores) {
   const { date, hour } = localNow(st.timezone || "America/New_York");
   if (!force && hour !== st.notify_hour) continue;
 
-  const subs = must(await sb.from("push_subscriptions").select("*").eq("store_id", st.id)).filter((s) => force || s.last_sent_on !== date);
+  const allSubs = must(await sb.from("push_subscriptions").select("*").eq("store_id", st.id));
+  const subs = allSubs.filter((s) => force || s.last_sent_on !== date);
+  console.log(`${st.name}: ${allSubs.length} phone(s) with alerts on, ${subs.length} due today`);
   if (!subs.length) continue;
 
   const products = {};
