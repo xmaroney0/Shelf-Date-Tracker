@@ -11,9 +11,9 @@ const iso = (n) => (n ? new Date(n).toISOString() : null);
 const toBatch = (r) => ({
   id: r.id, upc: r.upc, exp: r.exp, qty: r.qty, events: r.events || [], status: r.status,
   markedAt: ms(r.marked_at), seenAt: ms(r.seen_at), closedAt: ms(r.closed_at), closedVia: r.closed_via,
-  alert: r.alert, predicted: r.predicted, createdAt: ms(r.created_at),
+  alert: r.alert, predicted: r.predicted, createdAt: ms(r.created_at), passedOn: r.passed_on || null,
 });
-const BATCH_COLS = { qty: "qty", events: "events", status: "status", markedAt: "marked_at", seenAt: "seen_at", closedAt: "closed_at", closedVia: "closed_via", alert: "alert", predicted: "predicted" };
+const BATCH_COLS = { qty: "qty", events: "events", status: "status", markedAt: "marked_at", seenAt: "seen_at", closedAt: "closed_at", closedVia: "closed_via", alert: "alert", predicted: "predicted", passedOn: "passed_on" };
 const batchPatch = (p) => {
   const o = {};
   for (const k in p) { const c = BATCH_COLS[k]; if (!c) continue; o[c] = c.endsWith("_at") ? iso(p[k]) : p[k]; }
@@ -85,6 +85,8 @@ export async function supabaseBackend() {
       check(await sb.from("products").insert({ store_id: store.id, upc, ...prodPatch(p) }));
     },
     async updateProduct(store, upc, p) { check(await sb.from("products").update(prodPatch(p)).eq("store_id", store.id).eq("upc", upc)); },
+    // Deleting a product also deletes its logged dates (the database cascades it).
+    async deleteProduct(store, upc) { check(await sb.from("products").delete().eq("store_id", store.id).eq("upc", upc)); },
     // Adds many products at once. Products already saved are left as they are.
     async importProducts(store, list, onProgress) {
       for (let i = 0; i < list.length; i += 500) {
@@ -126,6 +128,7 @@ export function demoBackend() {
     watch(_s, cb) { listener = cb; },
     async addProduct(_s, upc, p) { mutate((v) => (v.products[upc] = { ...p })); },
     async updateProduct(_s, upc, p) { mutate((v) => (v.products[upc] = { ...v.products[upc], ...p })); },
+    async deleteProduct(_s, upc) { mutate((v) => { delete v.products[upc]; v.batches = v.batches.filter((b) => b.upc !== upc); }); },
     async importProducts(_s, list, onProgress) {
       mutate((v) => list.forEach((p) => { if (!v.products[p.upc]) { const { upc, ...rest } = p; v.products[upc] = rest; } }));
       if (onProgress) onProgress(list.length);

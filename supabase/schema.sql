@@ -50,6 +50,7 @@ create table public.batches (
   closed_via text,
   alert text,
   predicted text,
+  passed_on date, -- the day someone tapped Pass (checked it, left it on the shelf)
   created_at timestamptz not null default now(),
   foreign key (store_id, upc) references public.products (store_id, upc) on delete cascade
 );

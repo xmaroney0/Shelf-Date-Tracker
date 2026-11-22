@@ -18,10 +18,13 @@ const store = {
 const normUpc = (s) => { let d = String(s || "").replace(/\D/g, ""); if (d.length === 13 && d[0] === "0") d = d.slice(1); return d; };
 const productOf = (upc) => S.products[upc] || { name: "Unknown item", category: "Uncategorized" };
 const settings = () => ({ markdownDays: S.store?.markdownDays ?? 2, pullDays: S.store?.pullDays ?? 0 });
-function today() {
-  try { return new Intl.DateTimeFormat("en-CA", { timeZone: S.store?.timezone || undefined, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-  catch (e) { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function dayOf(ms) {
+  try { return new Intl.DateTimeFormat("en-CA", { timeZone: S.store?.timezone || undefined, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms)); }
+  catch (e) { const d = new Date(ms); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
 }
+const today = () => dayOf(Date.now());
+// "Pass" = someone checked it today and left it on the shelf. It comes back tomorrow.
+const passedToday = (b) => b.passedOn === today();
 const daysLeft = (exp) => daysBetween(today(), exp);
 const analysis = () => analyze({ batches: S.batches, products: S.products, settings: settings(), today: today() });
 const canEditStore = () => S.store?.role === "owner";
@@ -112,7 +115,7 @@ function render() {
   $("#tabs").hidden = !inApp;
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-current", t.dataset.tab === S.tab ? "page" : "false"));
   if (inApp && S.loaded) {
-    const n = analysis().rows.filter(needsAction).length;
+    const n = analysis().rows.filter((r) => needsAction(r) && !passedToday(r.b)).length;
     $("#badge").hidden = n === 0; $("#badge").textContent = n;
     $("#sub").textContent = (S.store?.name || "") + (n ? ` · ${n} to check` : " · All clear");
   } else { $("#badge").hidden = true; $("#sub").textContent = inApp ? S.store?.name || "" : ""; }
@@ -178,10 +181,15 @@ function batchCard(r, kind) {
   const est = m.est[b.id];
   const bits = [whenText(dl), `${b.qty || 0} stocked`];
   if (!m.learning && est != null) bits.push(`about ${est} left`);
-  const tag = kind === "pull" ? `<span class="tag pull">Pull</span>` : kind === "markdown" ? `<span class="tag markdown">Mark down</span>` : b.status === "marked" ? `<span class="tag marked">Marked down</span>` : kind === "likely" ? `<span class="tag ok">Likely sold</span>` : "";
+  const tag = kind === "pull" ? `<span class="tag pull">Pull</span>` : kind === "markdown" ? `<span class="tag markdown">Mark down</span>` : kind === "passed" ? `<span class="tag ok">Passed</span>` : b.status === "marked" ? `<span class="tag marked">Marked down</span>` : kind === "likely" ? `<span class="tag ok">Likely sold</span>` : "";
+  const takeOff = (alert) => `<button class="btn ${alert === "pull" ? "pull" : ""}" data-act="close" data-id="${b.id}" data-outcome="pulled" data-alert="${alert}">Taken off</button>`;
+  const pass = `<button class="btn" data-act="pass" data-id="${b.id}">Pass</button>`;
+  const sold = (alert) => `<button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-alert="${alert}">Already sold</button>`;
   let acts = "";
-  if (kind === "pull") acts = `<button class="btn pull" data-act="close" data-id="${b.id}" data-outcome="pulled" data-alert="pull">Pulled</button><button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-alert="pull">Already sold</button>`;
-  else if (kind === "markdown") acts = `<button class="btn mark" data-act="mark" data-id="${b.id}">Marked down</button><button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-alert="markdown">Already sold</button>`;
+  if (kind === "pull") acts = takeOff("pull") + pass + sold("pull");
+  else if (kind === "markdown") acts = `<button class="btn mark" data-act="mark" data-id="${b.id}">Marked down</button>` + takeOff("markdown") + pass + sold("markdown");
+  else if (kind === "soon") acts = takeOff("") + pass;
+  else if (kind === "passed") acts = `<button class="btn" data-act="unpass" data-id="${b.id}">Undo pass</button>`;
   else if (kind === "likely") acts = `<button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-via="confirm">Confirm sold</button><button class="btn" data-act="seen" data-id="${b.id}">Still on shelf</button>`;
   return `<article class="item ${kind}"><div class="code">${dateCode(b.exp)}</div><div class="info"><div class="name">${tag}${esc(p.name)}</div><div class="meta">${esc(bits.join(" · "))}</div></div>${acts ? `<div class="actions">${acts}</div>` : ""}</article>`;
 }
@@ -193,7 +201,9 @@ function checkView() {
   if (!S.batches.length) {
     return `<div class="empty"><div class="big-code">NOV 28</div><p><strong>Nothing on the shelf yet.</strong></p><p class="hint">Log each date as you stock it. Items close to their date show up here to mark down or pull.</p><button class="btn primary" data-act="tab" data-tab="stock">Stock the first item</button></div>`;
   }
-  const vis = analysis().rows.filter((r) => inCat(r.p));
+  const all = analysis().rows.filter((r) => inCat(r.p));
+  const passed = all.filter((r) => r.level && passedToday(r.b));
+  const vis = all.filter((r) => !passedToday(r.b));
   const pull = vis.filter((r) => r.level === "pull" && !r.likely);
   const mark = vis.filter((r) => r.level === "markdown" && !r.likely);
   const soon = vis.filter((r) => r.level === "soon" && !r.likely);
@@ -203,6 +213,7 @@ function checkView() {
   if (pull.length) h += `<section class="section"><h3>Pull today <span class="n">${pull.length}</span></h3>${pull.map((r) => batchCard(r, "pull")).join("")}</section>`;
   if (mark.length) h += `<section class="section"><h3>Mark down <span class="n">${mark.length}</span></h3>${mark.map((r) => batchCard(r, "markdown")).join("")}</section>`;
   if (soon.length) h += `<section class="section"><h3>Coming up <span class="n">${soon.length}</span></h3>${soon.map((r) => batchCard(r, "soon")).join("")}</section>`;
+  if (passed.length) h += `<section class="section"><h3>Checked today <span class="n">${passed.length}</span></h3><p class="hint">Passed today and left on the shelf. They come back tomorrow if they still need attention.</p>${passed.map((r) => batchCard(r, "passed")).join("")}</section>`;
   if (likely.length) {
     h += `<section class="section"><h3>Likely sold through <span class="n">${likely.length}</span></h3><p class="hint">Restocking shows these dates probably sold before they got close, so they aren't on your list. Confirm if you pass by, or tap Still on shelf if you see one.</p>`;
     h += S.showLikely ? likely.map((r) => batchCard(r, "likely")).join("") + `<button class="linkbtn" data-act="likely">Hide</button>` : `<button class="linkbtn" data-act="likely">Show ${likely.length}</button>`;
@@ -281,12 +292,27 @@ function productsView() {
         <div class="field"><label for="ep-name">Name</label><input id="ep-name" value="${esc(p.name)}"></div>
         <div class="field"><label for="ep-cat">Category</label><input id="ep-cat" value="${esc(p.category || "")}"></div>
         <div class="field"><label for="ep-days">Typical days until expiration</label><input id="ep-days" type="number" min="1" value="${p.shelfDays || 14}"></div>
-        <div class="row"><button class="btn" data-act="edit-cancel">Cancel</button><button class="btn primary grow" data-act="edit-save" data-upc="${esc(u)}">Save</button></div></div>`;
+        <div class="row"><button class="btn" data-act="edit-cancel">Cancel</button><button class="btn primary grow" data-act="edit-save" data-upc="${esc(u)}">Save</button></div>
+        ${deleteBlock(u, p)}</div>`;
     } else {
       h += `<button class="prow" data-act="edit" data-upc="${esc(u)}"><span class="info"><span class="name">${esc(p.name)}</span><br><span class="upc">${esc(u)} · ${esc(p.category || "")}</span></span><span class="right">${esc(status)}<br>${p.shelfDays || 14}-day dates</span></button>`;
     }
   }
   return h + `</div>`;
+}
+
+function deleteBlock(u, p) {
+  if (S.confirmDel !== u) return `<button class="linkbtn danger" data-act="del-ask" data-upc="${esc(u)}">Delete this product</button>`;
+  const dates = S.batches.filter((b) => b.upc === u);
+  const onShelf = dates.filter(isOpen).length;
+  const what = dates.length
+    ? `This also deletes its ${dates.length} logged date${dates.length === 1 ? "" : "s"}${onShelf ? `, including ${onShelf} still on the shelf` : ""}. They'll drop off the check list and results.`
+    : "It has no logged dates.";
+  return `<div class="confirm-box" role="alert">
+      <p><strong>Delete ${esc(p.name)} for everyone at your store?</strong></p>
+      <p class="hint">${what} This can't be undone. If it's scanned again later, it will be treated as a new product.</p>
+      <div class="row"><button class="btn" data-act="del-cancel">Keep it</button><button class="btn pull grow" data-act="del-go" data-upc="${esc(u)}">Delete product</button></div>
+    </div>`;
 }
 
 /* ---------- Import item list ---------- */
@@ -389,11 +415,11 @@ function resultsView() {
       <div class="stat"><div class="v">${Object.keys(S.products).length}</div><div class="l">Products tracked</div></div>
       <div class="stat"><div class="v">${restocks}</div><div class="l">Restocks logged</div></div>
       <div class="stat"><div class="v">${marked}</div><div class="l">Marked down before the date</div></div>
-      <div class="stat"><div class="v">${pulled}</div><div class="l">Pulled on time</div></div>
+      <div class="stat"><div class="v">${pulled}</div><div class="l">Taken off on time</div></div>
     </div>
     <section class="section"><h3>Were the alerts worth walking over?</h3><div class="card">`;
   if (checks) h += `<div class="bar" role="img" aria-label="${useful} useful checks, ${wasted} already sold"><span style="width:${(useful / checks) * 100}%;background:var(--ok)"></span><span style="width:${(wasted / checks) * 100}%;background:var(--pull)"></span></div>
-      <p><strong>${Math.round((useful / checks) * 100)}%</strong> of checks found product to mark down or pull. ${wasted} found it already sold.</p>`;
+      <p><strong>${Math.round((useful / checks) * 100)}%</strong> of checks found product to mark down or take off. ${wasted} found it already sold.</p>`;
   else h += `<p class="hint">Shows once people act on alerts from the Check tab.</p>`;
   h += `</div></section>
     <section class="section"><h3>Cleared without a check</h3><div class="stats">
@@ -542,7 +568,7 @@ function closeBatch(id, outcome, alert, via) {
   const b = S.batches.find((x) => x.id === id); if (!b) return;
   const m = models(S.batches)[b.upc] || emptyModel();
   const predicted = m.learning ? "learning" : m.likelySold.has(id) ? "sold" : "present";
-  return act(() => S.backend.updateBatch(S.store, id, { status: outcome, closedAt: Date.now(), closedVia: via || "check", alert: alert || null, predicted }), outcome === "pulled" ? "Marked as pulled" : "Marked as sold");
+  return act(() => S.backend.updateBatch(S.store, id, { status: outcome, closedAt: Date.now(), closedVia: via || "check", alert: alert || null, predicted }), outcome === "pulled" ? "Marked as taken off" : "Marked as sold");
 }
 
 /* ---------- push alerts ---------- */
@@ -624,10 +650,21 @@ document.addEventListener("click", async (e) => {
     case "close": return closeBatch(id, el.dataset.outcome, el.dataset.alert, el.dataset.via);
     case "mark": return act(() => S.backend.updateBatch(S.store, id, { status: "marked", markedAt: Date.now() }), "Marked down");
     case "seen": return act(() => S.backend.updateBatch(S.store, id, { seenAt: Date.now() }), "Back on the check list");
+    case "pass": return act(() => S.backend.updateBatch(S.store, id, { passedOn: today(), seenAt: Date.now() }), "Passed for today");
+    case "unpass": return act(() => S.backend.updateBatch(S.store, id, { passedOn: null }), "Back on the check list");
     case "rot-out": S.flow.ids = S.flow.ids.filter((x) => x !== id); return act(() => S.backend.updateBatch(S.store, id, { seenAt: Date.now() }));
     case "rot-gone": S.flow.ids = S.flow.ids.filter((x) => x !== id); return act(() => S.backend.updateBatch(S.store, id, { status: "gone", closedAt: Date.now(), closedVia: "stocking" }));
-    case "edit": S.editUpc = el.dataset.upc; S.fresh = true; return render();
-    case "edit-cancel": S.editUpc = null; S.fresh = true; return render();
+    case "edit": S.editUpc = el.dataset.upc; S.confirmDel = null; S.fresh = true; return render();
+    case "edit-cancel": S.editUpc = null; S.confirmDel = null; S.fresh = true; return render();
+    case "del-ask": S.confirmDel = el.dataset.upc; return render();
+    case "del-cancel": S.confirmDel = null; return render();
+    case "del-go": {
+      const upc = el.dataset.upc, name = productOf(upc).name;
+      el.disabled = true;
+      if (await act(() => S.backend.deleteProduct(S.store, upc), `Deleted ${name}`)) { S.editUpc = null; S.confirmDel = null; S.fresh = true; render(); }
+      else el.disabled = false;
+      return;
+    }
     case "edit-save": {
       const name = $("#ep-name").value.trim(); if (!name) return toast("Give the product a name.");
       if (await act(() => S.backend.updateProduct(S.store, el.dataset.upc, { name, category: $("#ep-cat").value.trim() || "Uncategorized", shelfDays: Math.max(1, parseInt($("#ep-days").value, 10) || 14) }), "Product updated")) { S.editUpc = null; S.fresh = true; render(); }
