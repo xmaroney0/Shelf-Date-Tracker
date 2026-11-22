@@ -5,7 +5,7 @@ import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
 // Bump this with every update (and VERSION in sw.js, and ?v= in index.html) so people can see which version they have.
-const APP_VERSION = "10";
+const APP_VERSION = "11";
 
 const S = {
   backend: null, session: null, screen: "loading", authMode: "signin", stores: [], store: null,
@@ -26,8 +26,6 @@ function dayOf(ms) {
   catch (e) { const d = new Date(ms); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
 }
 const today = () => dayOf(Date.now());
-// "Pass" = someone checked it today and left it on the shelf. It comes back tomorrow.
-const passedToday = (b) => b.passedOn === today();
 const daysLeft = (exp) => daysBetween(today(), exp);
 const analysis = () => analyze({ batches: S.batches, products: S.products, settings: settings(), today: today() });
 const canEditStore = () => S.store?.role === "owner";
@@ -118,7 +116,7 @@ function render() {
   $("#tabs").hidden = !inApp;
   document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-current", t.dataset.tab === S.tab ? "page" : "false"));
   if (inApp && S.loaded) {
-    const n = analysis().rows.filter((r) => needsAction(r) && !passedToday(r.b)).length;
+    const n = analysis().rows.filter(needsAction).length;
     $("#badge").hidden = n === 0; $("#badge").textContent = n;
     $("#sub").textContent = (S.store?.name || "") + (n ? ` · ${n} to check` : " · All clear");
   } else { $("#badge").hidden = true; $("#sub").textContent = inApp ? S.store?.name || "" : ""; }
@@ -184,15 +182,13 @@ function batchCard(r, kind) {
   const est = m.est[b.id];
   const bits = [whenText(dl), `${b.qty || 0} stocked`];
   if (!m.learning && est != null) bits.push(`about ${est} left`);
-  const tag = kind === "pull" ? `<span class="tag pull">Pull</span>` : kind === "markdown" ? `<span class="tag markdown">Mark down</span>` : kind === "passed" ? `<span class="tag ok">Passed</span>` : b.status === "marked" ? `<span class="tag marked">Marked down</span>` : kind === "likely" ? `<span class="tag ok">Likely sold</span>` : "";
+  const tag = kind === "pull" ? `<span class="tag pull">Pull</span>` : kind === "markdown" ? `<span class="tag markdown">Mark down</span>` : b.status === "marked" ? `<span class="tag marked">Marked down</span>` : kind === "likely" ? `<span class="tag ok">Likely sold</span>` : "";
   const takeOff = (alert) => `<button class="btn ${alert === "pull" ? "pull" : ""}" data-act="close" data-id="${b.id}" data-outcome="pulled" data-alert="${alert}">Pulled</button>`;
-  const pass = `<button class="btn" data-act="pass" data-id="${b.id}">Pass</button>`;
   const sold = (alert) => `<button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-alert="${alert}">Already sold</button>`;
   let acts = "";
-  if (kind === "pull") acts = takeOff("pull") + pass + sold("pull");
-  else if (kind === "markdown") acts = `<button class="btn mark" data-act="mark" data-id="${b.id}">Marked down</button>` + takeOff("markdown") + pass + sold("markdown");
-  else if (kind === "soon") acts = takeOff("") + pass;
-  else if (kind === "passed") acts = `<button class="btn" data-act="unpass" data-id="${b.id}">Undo pass</button>`;
+  if (kind === "pull") acts = takeOff("pull") + sold("pull");
+  else if (kind === "markdown") acts = `<button class="btn mark" data-act="mark" data-id="${b.id}">Marked down</button>` + takeOff("markdown") + sold("markdown");
+  else if (kind === "soon") acts = takeOff("");
   else if (kind === "likely") acts = `<button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-via="confirm">Confirm sold</button><button class="btn" data-act="seen" data-id="${b.id}">Still on shelf</button>`;
   return `<article class="item ${kind}"><div class="code">${dateCode(b.exp)}</div><div class="info"><div class="name">${tag}${esc(p.name)}</div><div class="meta">${esc(bits.join(" · "))}</div></div>${acts ? `<div class="actions">${acts}</div>` : ""}</article>`;
 }
@@ -204,9 +200,7 @@ function checkView() {
   if (!S.batches.length) {
     return `<div class="empty"><div class="big-code">NOV 28</div><p><strong>Nothing on the shelf yet.</strong></p><p class="hint">Log each date as you stock it. Items close to their date show up here to mark down or pull.</p><button class="btn primary" data-act="tab" data-tab="stock">Stock the first item</button></div>`;
   }
-  const all = analysis().rows.filter((r) => inCat(r.p));
-  const passed = all.filter((r) => r.level && passedToday(r.b));
-  const vis = all.filter((r) => !passedToday(r.b));
+  const vis = analysis().rows.filter((r) => inCat(r.p));
   const pull = vis.filter((r) => r.level === "pull" && !r.likely);
   const mark = vis.filter((r) => r.level === "markdown" && !r.likely);
   const soon = vis.filter((r) => r.level === "soon" && !r.likely);
@@ -215,9 +209,7 @@ function checkView() {
   if (!pull.length && !mark.length) h += `<div class="empty"><div class="big-code">ALL OK</div><p><strong>Nothing to check right now.</strong></p><p class="hint">No dates on the shelf are inside the markdown window.</p></div>`;
   if (pull.length) h += `<section class="section"><h3>Pull today <span class="n">${pull.length}</span></h3>${pull.map((r) => batchCard(r, "pull")).join("")}</section>`;
   if (mark.length) h += `<section class="section"><h3>Mark down <span class="n">${mark.length}</span></h3>${mark.map((r) => batchCard(r, "markdown")).join("")}</section>`;
-  if (soon.length) h += `<section class="section"><h3>Coming up <span class="n">${soon.length}</span></h3>${soon.map((r) => batchCard(r, "soon")).join("")}</section>`;
-  if (passed.length) h += `<section class="section"><h3>Checked today <span class="n">${passed.length}</span></h3><p class="hint">Passed today and left on the shelf. They come back tomorrow if they still need attention.</p>${passed.map((r) => batchCard(r, "passed")).join("")}</section>`;
-  if (likely.length) {
+  if (soon.length) h += `<section class="section"><h3>Coming up <span class="n">${soon.length}</span></h3>${soon.map((r) => batchCard(r, "soon")).join("")}</section>`;  if (likely.length) {
     h += `<section class="section"><h3>Likely sold through <span class="n">${likely.length}</span></h3><p class="hint">Restocking shows these dates probably sold before they got close, so they aren't on your list. Confirm if you pass by, or tap Still on shelf if you see one.</p>`;
     h += S.showLikely ? likely.map((r) => batchCard(r, "likely")).join("") + `<button class="linkbtn" data-act="likely">Hide</button>` : `<button class="linkbtn" data-act="likely">Show ${likely.length}</button>`;
     h += `</section>`;
@@ -670,8 +662,6 @@ document.addEventListener("click", async (e) => {
     case "close": return closeBatch(id, el.dataset.outcome, el.dataset.alert, el.dataset.via);
     case "mark": return act(() => S.backend.updateBatch(S.store, id, { status: "marked", markedAt: Date.now() }), "Marked down");
     case "seen": return act(() => S.backend.updateBatch(S.store, id, { seenAt: Date.now() }), "Back on the check list");
-    case "pass": return act(() => S.backend.updateBatch(S.store, id, { passedOn: today(), seenAt: Date.now() }), "Passed for today");
-    case "unpass": return act(() => S.backend.updateBatch(S.store, id, { passedOn: null }), "Back on the check list");
     case "rot-out": S.flow.ids = S.flow.ids.filter((x) => x !== id); return act(() => S.backend.updateBatch(S.store, id, { seenAt: Date.now() }));
     case "rot-gone": S.flow.ids = S.flow.ids.filter((x) => x !== id); return act(() => S.backend.updateBatch(S.store, id, { status: "gone", closedAt: Date.now(), closedVia: "stocking" }));
     case "edit": S.editUpc = el.dataset.upc; S.confirmDel = null; S.fresh = true; return render();
