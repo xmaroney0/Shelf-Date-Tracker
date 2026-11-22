@@ -5,7 +5,7 @@ import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
 // Bump this with every update (and VERSION in sw.js, and ?v= in index.html) so people can see which version they have.
-const APP_VERSION = "11";
+const APP_VERSION = "12";
 
 const S = {
   backend: null, session: null, screen: "loading", authMode: "signin", stores: [], store: null,
@@ -393,32 +393,125 @@ async function runImport() {
 }
 
 /* ---------- Results ---------- */
+// Everything that happened to a date on the shelf, as dated events: sold, marked down, pulled.
+const OUTCOMES = [
+  { key: "sold", label: "Sold", color: "var(--ok)" },
+  { key: "marked", label: "Marked down", color: "var(--mark)" },
+  { key: "pulled", label: "Pulled", color: "var(--pull)" },
+];
+const PERIODS = [["today", "Today"], ["7", "7 days"], ["30", "30 days"], ["all", "All time"]];
+function outcomeEvents() {
+  const out = [];
+  for (const b of S.batches) {
+    const p = productOf(b.upc);
+    if (!inCat(p)) continue;
+    if (b.markedAt) out.push({ type: "marked", at: b.markedAt, b, p });
+    if (b.status === "gone" && b.closedAt) out.push({ type: "sold", at: b.closedAt, b, p });
+    if (b.status === "pulled" && b.closedAt) out.push({ type: "pulled", at: b.closedAt, b, p });
+  }
+  return out.sort((x, y) => y.at - x.at);
+}
+function inPeriod(at, period) {
+  if (period === "all") return true;
+  const d = dayOf(at), t = today();
+  if (period === "today") return d === t;
+  return d >= addDays(t, -(Number(period) - 1));
+}
+function dailyChart(events, nDays) {
+  const t = today();
+  const days = Array.from({ length: nDays }, (_, i) => addDays(t, i - nDays + 1));
+  const counts = Object.fromEntries(days.map((d) => [d, { sold: 0, marked: 0, pulled: 0 }]));
+  events.forEach((e) => { const d = dayOf(e.at); if (counts[d]) counts[d][e.type]++; });
+  const max = Math.max(1, ...days.map((d) => counts[d].sold + counts[d].marked + counts[d].pulled));
+  const label = (d, i) => {
+    const dt = parseYmdLocal(d);
+    if (nDays <= 7) return ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][dt.getDay()];
+    return i % 5 === 0 || i === nDays - 1 ? String(dt.getDate()) : "";
+  };
+  const cols = days.map((d, i) => {
+    const c = counts[d], total = c.sold + c.marked + c.pulled;
+    const segs = OUTCOMES.map((o) => c[o.key] ? `<span style="height:${(c[o.key] / max) * 100}%;background:${o.color}"></span>` : "").join("");
+    return `<div class="col" title="${esc(shortDateFromYmd(d))}: ${c.sold} sold, ${c.marked} marked down, ${c.pulled} pulled"><div class="stack">${segs}${total ? `<em>${total}</em>` : ""}</div><div class="x">${label(d, i)}</div></div>`;
+  }).join("");
+  return `<div class="chart ${nDays > 7 ? "dense" : ""}" role="img" aria-label="Daily sold, marked down and pulled for the last ${nDays} days">${cols}</div>
+    <div class="legend">${OUTCOMES.map((o) => `<span><i style="background:${o.color}"></i>${o.label}</span>`).join("")}</div>`;
+}
+const parseYmdLocal = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const shortDateFromYmd = (s) => shortDate(parseYmdLocal(s).getTime());
+
+function exportCsv(events, period) {
+  const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const fmt = (ms) => { const d = new Date(ms); return [dayOf(ms), d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })]; };
+  const label = { sold: "Sold", marked: "Marked down", pulled: "Pulled" };
+  const via = { check: "Check list", stocking: "While restocking", confirm: "Confirmed predicted sell-through" };
+  const lines = [["Date", "Time", "Outcome", "Product", "UPC", "Category", "Expiration date", "Units stocked", "Recorded from"].map(q).join(",")];
+  for (const e of events) {
+    const [d, tm] = fmt(e.at);
+    lines.push([d, tm, label[e.type], e.p.name, e.b.upc, e.p.category, e.b.exp, e.b.qty, e.type === "marked" ? "Check list" : via[e.b.closedVia] || e.b.closedVia || ""].map(q).join(","));
+  }
+  const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${(S.store?.name || "store").replace(/[^\w-]+/g, "-")}-results-${period === "all" ? "all-time" : period === "today" ? today() : "last-" + period + "-days"}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 function resultsView() {
   if (!S.loaded) return notLoaded();
+  const period = S.resPeriod || "7";
   const bs = S.batches;
   const rows = analysis().rows;
+  const allEvents = outcomeEvents();
+  const events = allEvents.filter((e) => inPeriod(e.at, period));
+  const totals = { sold: 0, marked: 0, pulled: 0 };
+  events.forEach((e) => totals[e.type]++);
   const start = bs.length ? Math.min(...bs.map((b) => b.createdAt || Date.now())) : null;
-  const restocks = bs.reduce((s, b) => s + (b.events || []).length, 0);
+  const periodName = Object.fromEntries(PERIODS)[period];
+
+  let h = `<div class="prod-head"><h2>Results</h2>${events.length ? `<button class="btn" data-act="res-csv">Download</button>` : ""}</div>
+    <p class="hint">${start ? `Tracking since ${shortDate(start)}` : "Starts when someone logs the first item."}</p>
+    <div class="chips" role="group" aria-label="Time period">${PERIODS.map(([k, l]) => `<button class="chip" data-act="res-period" data-period="${k}" aria-pressed="${period === k}">${l}</button>`).join("")}</div>
+    ${catChips()}
+    <div class="tiles">${OUTCOMES.map((o) => `<div class="tile" style="--c:${o.color}"><div class="v">${totals[o.key]}</div><div class="l">${o.label}</div></div>`).join("")}</div>
+    <p class="hint">Each count is one product date, like Whole Milk with a NOV 28 date. Items marked down and later sold count in both.</p>`;
+
+  if (period !== "today") h += `<section class="section"><h3>By day${period === "all" ? ", last 30 days" : ""}</h3><div class="card">${dailyChart(allEvents.filter((e) => inPeriod(e.at, period === "7" ? "7" : "30")), period === "7" ? 7 : 30)}</div></section>`;
+
+  // Per product
+  const by = {};
+  events.forEach((e) => { const r = (by[e.b.upc] ||= { p: e.p, sold: 0, marked: 0, pulled: 0 }); r[e.type]++; });
+  const prodRows = Object.values(by).sort((a, b) => b.pulled - a.pulled || b.marked - a.marked || (b.sold + b.marked + b.pulled) - (a.sold + a.marked + a.pulled) || a.p.name.localeCompare(b.p.name));
+  if (prodRows.length) {
+    const shown = S.resAll ? prodRows : prodRows.slice(0, 10);
+    h += `<section class="section"><h3>By product <span class="n">${prodRows.length}</span></h3><p class="hint">Most pulled first. These are the items most often going to waste.</p>
+      <div class="table-wrap"><table class="rtable"><thead><tr><th>Product</th><th>Sold</th><th>Marked</th><th>Pulled</th></tr></thead><tbody>
+      ${shown.map((r) => `<tr><td>${esc(r.p.name)}</td><td>${r.sold || ""}</td><td>${r.marked || ""}</td><td class="${r.pulled ? "bad" : ""}">${r.pulled || ""}</td></tr>`).join("")}
+      </tbody></table></div>
+      ${prodRows.length > 10 ? `<button class="linkbtn" data-act="res-all">${S.resAll ? "Show top 10" : `Show all ${prodRows.length}`}</button>` : ""}</section>`;
+  } else {
+    h += `<div class="empty"><p><strong>Nothing recorded ${period === "today" ? "today" : period === "all" ? "yet" : `in the last ${periodName.toLowerCase()}`}.</strong></p><p class="hint">Counts come from tapping Marked down, Pulled or Already sold on the Check list, and answering "Sold through" while restocking.</p></div>`;
+  }
+
+  // Recent activity
+  if (events.length) {
+    const label = { sold: "Sold", marked: "Marked down", pulled: "Pulled" };
+    h += `<section class="section"><h3>Recent</h3><div class="list">${events.slice(0, 8).map((e) => `<div class="prow"><span class="info"><span class="name"><span class="tag ${e.type === "sold" ? "ok" : e.type === "marked" ? "markdown" : "pull"}">${label[e.type]}</span>${esc(e.p.name)}</span><br><span class="upc">${dateCode(e.b.exp)} date · ${e.b.qty || 0} stocked</span></span><span class="right">${esc(shortDate(e.at))}<br>${new Date(e.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span></div>`).join("")}</div></section>`;
+  }
+
+  // How well the predictions and alerts work
   const marked = bs.filter((b) => b.markedAt).length;
   const pulled = bs.filter((b) => b.status === "pulled").length;
   const wasted = bs.filter((b) => b.status === "gone" && b.closedVia === "check" && !b.markedAt).length;
   const atStock = bs.filter((b) => b.status === "gone" && b.closedVia === "stocking").length;
   const likelyNow = rows.filter((r) => r.likely).length;
   const useful = marked + pulled, checks = useful + wasted;
-  const days = start ? Math.max(1, Math.ceil((Date.now() - start) / DAY)) : 0;
-  let h = `<h2>Results</h2><p class="hint">${start ? `Tracking since ${shortDate(start)} · day ${days}` : "Starts when someone logs the first item."}</p>
-    <div class="stats">
-      <div class="stat"><div class="v">${Object.keys(S.products).length}</div><div class="l">Products tracked</div></div>
-      <div class="stat"><div class="v">${restocks}</div><div class="l">Restocks logged</div></div>
-      <div class="stat"><div class="v">${marked}</div><div class="l">Marked down before the date</div></div>
-      <div class="stat"><div class="v">${pulled}</div><div class="l">Pulled on time</div></div>
-    </div>
-    <section class="section"><h3>Were the alerts worth walking over?</h3><div class="card">`;
+  h += `<section class="section"><h3>Were the alerts worth walking over? (all time)</h3><div class="card">`;
   if (checks) h += `<div class="bar" role="img" aria-label="${useful} useful checks, ${wasted} already sold"><span style="width:${(useful / checks) * 100}%;background:var(--ok)"></span><span style="width:${(wasted / checks) * 100}%;background:var(--pull)"></span></div>
       <p><strong>${Math.round((useful / checks) * 100)}%</strong> of checks found product to mark down or pull. ${wasted} found it already sold.</p>`;
   else h += `<p class="hint">Shows once people act on alerts from the Check tab.</p>`;
   h += `</div></section>
-    <section class="section"><h3>Cleared without a check</h3><div class="stats">
+    <section class="section"><h3>Cleared without a check (all time)</h3><div class="stats">
       <div class="stat"><div class="v">${atStock}</div><div class="l">Cleared while restocking</div></div>
       <div class="stat"><div class="v">${likelyNow}</div><div class="l">Predicted sold through right now</div></div></div></section>
     <section class="section"><h3>How it works</h3><div class="card"><p class="hint">Each restock tells the tracker how fast an item sells. After 3 restocks over 2 or more days, it estimates which dates are still on the shelf and only alerts on those. Fast sellers stop showing up; slow sellers get flagged before their date.</p></div></section>`;
@@ -697,6 +790,13 @@ document.addEventListener("click", async (e) => {
     case "switch": { const sid = $("#st-switch").value; S.store = S.stores.find((s) => s.id === sid); S.loaded = false; return enterStore(); }
     case "add-store": S.screen = "pickStore"; S.fresh = true; return render();
     case "back-app": S.screen = "app"; S.fresh = true; return render();
+    case "res-period": S.resPeriod = el.dataset.period; S.resAll = false; return render();
+    case "res-all": S.resAll = !S.resAll; return render();
+    case "res-csv": {
+      const period = S.resPeriod || "7";
+      exportCsv(outcomeEvents().filter((e) => inPeriod(e.at, period)), period);
+      return toast("Results file downloaded");
+    }
     case "imp-pick": return pickImportFile();
     case "imp-cancel": S.imp = null; S.fresh = true; return render();
     case "imp-go": return runImport();
