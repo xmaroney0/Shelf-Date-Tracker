@@ -1,6 +1,7 @@
 import { configured, supabaseBackend, demoBackend } from "./data.js";
 import { VAPID_PUBLIC_KEY } from "./config.js";
 import { scanBarcode } from "./scanner.js";
+import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
 const S = {
@@ -264,10 +265,12 @@ function stockView() {
 /* ---------- Products ---------- */
 function productsView() {
   if (!S.loaded) return notLoaded();
+  if (S.imp) return importView();
   const ms = models(S.batches);
   const entries = Object.entries(S.products).sort((a, b) => (a[1].category || "").localeCompare(b[1].category || "") || a[1].name.localeCompare(b[1].name));
-  let h = `<h2>Products</h2>`;
-  if (!entries.length) return h + `<div class="empty"><p><strong>No products yet.</strong></p><p class="hint">The first time anyone scans a UPC, they name it and it's saved here for the whole store.</p></div>`;
+  let h = `<div class="prod-head"><h2>Products</h2>${canEditStore() ? `<button class="btn" data-act="imp-pick">Import item list</button>` : ""}</div>`;
+  if (!entries.length) return h + `<div class="empty"><p><strong>No products yet.</strong></p><p class="hint">The first time anyone scans a UPC, they name it and it's saved here for the whole store.${canEditStore() ? " Or import your store's item list as a CSV or Excel file." : ""}</p></div>`;
+  h += `<p class="hint">${entries.length} products</p>`;
   h += catChips() + `<div class="list">`;
   for (const [u, p] of entries) {
     if (!inCat(p)) continue;
@@ -284,6 +287,87 @@ function productsView() {
     }
   }
   return h + `</div>`;
+}
+
+/* ---------- Import item list ---------- */
+function importView() {
+  const c = S.imp;
+  const res = importer.build(c);
+  const fresh = res.items.filter((p) => !S.products[p.upc]);
+  const already = res.items.length - fresh.length;
+  const colOpts = (sel, none) => (none ? `<option value="-1" ${sel < 0 ? "selected" : ""}>${none}</option>` : "") + c.headers.map((h, i) => `<option value="${i}" ${sel === i ? "selected" : ""}>${esc(h)}</option>`).join("");
+  const example = c.body.find((r) => r[c.upcCol]) || [];
+  let h = `<h2>Import item list</h2>
+    <p class="hint">${esc(c.fileName)} · ${c.body.length} rows</p>
+    <div class="card">
+      <div class="field"><label for="imp-upc">Column with the UPC</label><select id="imp-upc">${colOpts(c.upcCol, "Pick a column")}</select></div>
+      <div class="field"><label for="imp-name">Column with the item name</label><select id="imp-name">${colOpts(c.nameCol, "Pick a column")}</select></div>
+      <div class="field"><label for="imp-size">Column with the size (optional)</label><select id="imp-size">${colOpts(c.sizeCol, "None")}</select></div>
+      <div class="field"><label for="imp-catmode">Category</label><select id="imp-catmode">
+        <option value="one" ${!c.useCategoryCol ? "selected" : ""}>Put everything in one category</option>
+        ${c.headers.map((hd, i) => `<option value="${i}" ${c.useCategoryCol && c.categoryCol === i ? "selected" : ""}>Use column: ${esc(hd)}</option>`).join("")}</select></div>
+      ${!c.useCategoryCol ? `<div class="field"><label for="imp-cat">Category name</label><input id="imp-cat" value="${esc(c.category)}" list="imp-cats"><datalist id="imp-cats">${["Milk", "Yogurt", "Cheese", "Eggs", "Butter", "Cream", "Juice", "Dairy"].map((v) => `<option value="${v}">`).join("")}</datalist></div>` : ""}
+      <div class="field"><label for="imp-days">Typical days until expiration</label><input id="imp-days" type="number" min="1" max="365" value="${c.shelfDays}"></div>
+      <label class="check"><input type="checkbox" id="imp-caps" ${c.fixCaps ? "checked" : ""}> Change ALL CAPS names to normal capitals</label>
+      <div class="field"><label for="imp-check">Do the UPCs include the last check digit?</label><select id="imp-check">
+        <option value="auto" ${c.checkMode === "auto" ? "selected" : ""}>Figure it out (looks like ${res.withCheck ? "yes" : "no"})</option>
+        <option value="yes" ${c.checkMode === "yes" ? "selected" : ""}>Yes, they're full barcodes</option>
+        <option value="no" ${c.checkMode === "no" ? "selected" : ""}>No, the last digit is missing</option></select>
+        <p class="hint">If scanning an imported item says "New product," try switching this.${example[c.upcCol] ? ` Example from your file: <span class="upc">${esc(example[c.upcCol])}</span> becomes <span class="upc">${esc(importer.normalizeUpc(example[c.upcCol], res.withCheck) || "not a UPC")}</span>.` : ""}</p></div>
+    </div>`;
+  if (res.items.length) {
+    h += `<section class="section"><h3>Preview</h3><div class="list">${res.items.slice(0, 6).map((p) => `<div class="prow"><span class="info"><span class="name">${esc(p.name)}</span><br><span class="upc">${esc(p.upc)}</span></span><span class="right">${esc(p.category)}${S.products[p.upc] ? "<br>Already saved" : ""}</span></div>`).join("")}</div></section>`;
+  }
+  const notes = [`<strong>${fresh.length}</strong> new products to add`];
+  if (already) notes.push(`${already} already in the app (left as they are)`);
+  if (res.skipped) notes.push(`${res.skipped} rows skipped (no UPC or name)`);
+  if (res.dupes) notes.push(`${res.dupes} repeated UPCs skipped`);
+  h += `<div class="card"><p>${notes.join("<br>")}</p>
+      <div class="row"><button class="btn" data-act="imp-cancel">Cancel</button><button class="btn primary grow" data-act="imp-go" ${fresh.length && !S.impBusy ? "" : "disabled"}>${S.impBusy ? "Importing…" : `Import ${fresh.length} products`}</button></div></div>`;
+  return h;
+}
+async function pickImportFile() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".csv,.txt,.tsv,.xlsx,.xls,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel";
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    try {
+      const rows = await importer.readFile(file);
+      if (rows.length < 1) return toast("That file looks empty.");
+      S.imp = { ...importer.setup(rows), fileName: file.name };
+      S.fresh = true; render(); window.scrollTo(0, 0);
+    } catch (e) { toast((e && e.message) || "Couldn't read that file. Try saving it as CSV."); }
+  };
+  input.click();
+}
+function updateImport(id, el) {
+  const c = S.imp; if (!c) return;
+  const n = parseInt(el.value, 10);
+  if (id === "imp-upc") c.upcCol = n;
+  else if (id === "imp-name") c.nameCol = n;
+  else if (id === "imp-size") c.sizeCol = n;
+  else if (id === "imp-catmode") { c.useCategoryCol = el.value !== "one"; if (c.useCategoryCol) c.categoryCol = n; }
+  else if (id === "imp-cat") c.category = el.value.trim() || "Uncategorized";
+  else if (id === "imp-days") c.shelfDays = Math.max(1, Math.min(365, n || 14));
+  else if (id === "imp-caps") c.fixCaps = el.checked;
+  else if (id === "imp-check") c.checkMode = el.value;
+  else return;
+  S.fresh = true; render();
+}
+document.addEventListener("change", (e) => { if (e.target.id && e.target.id.startsWith("imp-")) updateImport(e.target.id, e.target); });
+async function runImport() {
+  const res = importer.build(S.imp);
+  const fresh = res.items.filter((p) => !S.products[p.upc]);
+  if (!fresh.length) return;
+  S.impBusy = true; render();
+  try {
+    await S.backend.importProducts(S.store, fresh, (done) => { if (fresh.length > 500) toast(`Saved ${done} of ${fresh.length}…`); });
+    S.imp = null; toast(`Imported ${fresh.length} products`);
+    await refresh();
+  } catch (e) { toast((e && e.message) || "The import stopped partway. Run it again; saved products are skipped."); }
+  finally { S.impBusy = false; S.fresh = true; render(); }
 }
 
 /* ---------- Results ---------- */
@@ -560,6 +644,9 @@ document.addEventListener("click", async (e) => {
     case "switch": { const sid = $("#st-switch").value; S.store = S.stores.find((s) => s.id === sid); S.loaded = false; return enterStore(); }
     case "add-store": S.screen = "pickStore"; S.fresh = true; return render();
     case "back-app": S.screen = "app"; S.fresh = true; return render();
+    case "imp-pick": return pickImportFile();
+    case "imp-cancel": S.imp = null; S.fresh = true; return render();
+    case "imp-go": return runImport();
     case "demo-sample": S.backend.loadSample(); return toast("Example week loaded. Items marked (example) aren't real.");
     case "demo-clear": S.backend.reset(); await refresh(); return toast("Demo data cleared");
     case "demo-leave": store.set("sdt-mode", null); return location.reload();

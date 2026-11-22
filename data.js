@@ -85,6 +85,14 @@ export async function supabaseBackend() {
       check(await sb.from("products").insert({ store_id: store.id, upc, ...prodPatch(p) }));
     },
     async updateProduct(store, upc, p) { check(await sb.from("products").update(prodPatch(p)).eq("store_id", store.id).eq("upc", upc)); },
+    // Adds many products at once. Products already saved are left as they are.
+    async importProducts(store, list, onProgress) {
+      for (let i = 0; i < list.length; i += 500) {
+        const rows = list.slice(i, i + 500).map((p) => ({ store_id: store.id, upc: p.upc, ...prodPatch(p) }));
+        check(await sb.from("products").upsert(rows, { onConflict: "store_id,upc", ignoreDuplicates: true }));
+        if (onProgress) onProgress(Math.min(i + 500, list.length));
+      }
+    },
     async addBatch(store, b) {
       check(await sb.from("batches").insert({ store_id: store.id, upc: b.upc, exp: b.exp, qty: b.qty, events: b.events, status: "open" }));
     },
@@ -118,6 +126,10 @@ export function demoBackend() {
     watch(_s, cb) { listener = cb; },
     async addProduct(_s, upc, p) { mutate((v) => (v.products[upc] = { ...p })); },
     async updateProduct(_s, upc, p) { mutate((v) => (v.products[upc] = { ...v.products[upc], ...p })); },
+    async importProducts(_s, list, onProgress) {
+      mutate((v) => list.forEach((p) => { if (!v.products[p.upc]) { const { upc, ...rest } = p; v.products[upc] = rest; } }));
+      if (onProgress) onProgress(list.length);
+    },
     async addBatch(_s, b) { mutate((v) => v.batches.push({ id: "b" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), status: "open", createdAt: Date.now(), ...b })); },
     async updateBatch(_s, id, p) { mutate((v) => { const b = v.batches.find((x) => x.id === id); if (b) Object.assign(b, p); }); },
     async updateStore(_s, p) { mutate((v) => Object.assign(v.store, p)); },

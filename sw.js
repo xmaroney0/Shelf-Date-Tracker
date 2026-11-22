@@ -1,7 +1,7 @@
 // Service worker: lets the app open without signal and shows daily alerts.
 // Change VERSION whenever you upload new app files so phones pick them up.
-const VERSION = "sdt-v2";
-const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./data.js", "./model.js", "./scanner.js", "./config.js", "./manifest.webmanifest", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"];
+const VERSION = "sdt-v3";
+const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./data.js", "./model.js", "./scanner.js", "./importer.js", "./config.js", "./manifest.webmanifest", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
