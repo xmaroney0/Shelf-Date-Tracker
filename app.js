@@ -5,7 +5,7 @@ import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
 // Bump this with every update (and VERSION in sw.js, and ?v= in index.html) so people can see which version they have.
-const APP_VERSION = "9";
+const APP_VERSION = "10";
 
 const S = {
   backend: null, session: null, screen: "loading", authMode: "signin", stores: [], store: null,
@@ -654,7 +654,12 @@ document.addEventListener("click", async (e) => {
     case "signout": await S.backend.signOut(); S.store = null; S.loaded = false; store.set("sdt-store", null); return;
     case "cat": S.cat = el.dataset.cat; return render();
     case "likely": S.showLikely = !S.showLikely; return render();
-    case "scan": { const code = await scanBarcode(); if (code) startUpc(code); return; }
+    case "scan": {
+      const code = await scanBarcode();
+      if (code) startUpc(code);
+      else if (code === "") $("#upc")?.focus(); // chose "Type it"
+      return;
+    }
     case "upc-go": return startUpc($("#upc").value);
     case "pick": return startUpc(el.dataset.upc);
     case "cancel": S.flow = { step: "scan" }; S.fresh = true; return render();
