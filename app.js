@@ -5,7 +5,7 @@ import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
 // Bump this with every update (and VERSION in sw.js, and ?v= in index.html) so people can see which version they have.
-const APP_VERSION = "7";
+const APP_VERSION = "8";
 
 const S = {
   backend: null, session: null, screen: "loading", authMode: "signin", stores: [], store: null,
@@ -262,6 +262,7 @@ function stockView() {
         <div class="chips"><button class="chip" data-act="exp" data-n="-1">−1 day</button><button class="chip" data-act="exp" data-n="1">+1 day</button><button class="chip" data-act="exp" data-n="7">+1 week</button></div>
         <div class="field"><label for="sf-qty">Units put out</label><div class="stepper"><button class="btn" data-act="qty" data-n="-1" aria-label="One fewer">−</button><input id="sf-qty" type="number" inputmode="numeric" min="1" value="${p.lastQty || 6}"><button class="btn" data-act="qty" data-n="1" aria-label="One more">+</button></div></div>
         <div class="row"><button class="btn" data-act="cancel">Cancel</button><button class="btn primary grow" data-act="stock-save">Log it</button></div>
+        <button class="linkbtn" data-act="edit-from-stock" data-upc="${esc(f.upc)}">Edit or delete this product</button>
       </div>`;
   }
   if (f.step === "rotate") {
@@ -305,7 +306,7 @@ function productsView() {
 }
 
 function deleteBlock(u, p) {
-  if (S.confirmDel !== u) return `<button class="linkbtn danger" data-act="del-ask" data-upc="${esc(u)}">Delete this product</button>`;
+  if (S.confirmDel !== u) return `<button class="btn danger" data-act="del-ask" data-upc="${esc(u)}">Delete this product</button>`;
   const dates = S.batches.filter((b) => b.upc === u);
   const onShelf = dates.filter(isOpen).length;
   const what = dates.length
@@ -670,6 +671,12 @@ document.addEventListener("click", async (e) => {
     case "rot-gone": S.flow.ids = S.flow.ids.filter((x) => x !== id); return act(() => S.backend.updateBatch(S.store, id, { status: "gone", closedAt: Date.now(), closedVia: "stocking" }));
     case "edit": S.editUpc = el.dataset.upc; S.confirmDel = null; S.fresh = true; return render();
     case "edit-cancel": S.editUpc = null; S.confirmDel = null; S.fresh = true; return render();
+    case "edit-from-stock": {
+      const upc = el.dataset.upc;
+      S.flow = { step: "scan" }; S.tab = "products"; S.cat = "All"; S.editUpc = upc; S.confirmDel = null; S.fresh = true; render();
+      document.querySelector("#ep-name")?.closest(".card")?.scrollIntoView({ block: "start" });
+      return;
+    }
     case "del-ask": S.confirmDel = el.dataset.upc; return render();
     case "del-cancel": S.confirmDel = null; return render();
     case "del-go": {
