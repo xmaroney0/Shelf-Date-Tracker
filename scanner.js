@@ -19,21 +19,43 @@ export function scanBarcode() {
     const wrap = document.createElement("div");
     wrap.className = "scanner";
     wrap.innerHTML = `<video playsinline muted></video><div class="scan-frame" aria-hidden="true"></div>
-      <div class="scan-bar"><p class="scan-msg">Point the camera at the barcode</p><button class="btn" type="button">Cancel</button></div>`;
+      <div class="scan-bar"><p class="scan-msg">Point the camera at the barcode</p>
+        <div class="scan-btns"><button class="btn torch" type="button" aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><span>Flash</span></button><button class="btn cancel" type="button">Cancel</button></div></div>`;
     document.body.appendChild(wrap);
     const video = wrap.querySelector("video");
     const msg = wrap.querySelector(".scan-msg");
-    let stream = null, done = false, reader = null, raf = 0;
+    const torchBtn = wrap.querySelector(".torch");
+    let stream = null, done = false, reader = null, raf = 0, torchOn = false;
+    const track = () => { const s = stream || video.srcObject; return s && s.getVideoTracks ? s.getVideoTracks()[0] : null; };
+    // Show the flash button only on phones whose camera supports it.
+    const setupTorch = () => {
+      const t = track();
+      if (!t || done || !t.getCapabilities) return false;
+      try { if (t.getCapabilities().torch) { torchBtn.hidden = false; return true; } } catch (e) {}
+      return false;
+    };
+    const watchTorch = () => { let tries = 0; const iv = setInterval(() => { if (setupTorch() || done || ++tries > 10) clearInterval(iv); }, 300); };
+    torchBtn.onclick = async () => {
+      const t = track(); if (!t) return;
+      try {
+        await t.applyConstraints({ advanced: [{ torch: !torchOn }] });
+        torchOn = !torchOn;
+        torchBtn.setAttribute("aria-pressed", String(torchOn));
+        torchBtn.querySelector("span").textContent = torchOn ? "Flash on" : "Flash";
+      } catch (e) { torchBtn.hidden = true; msg.textContent = "This camera's flash can't be turned on from the app."; }
+    };
     const finish = (code) => {
       if (done) return; done = true;
       cancelAnimationFrame(raf);
+      try { const t = track(); if (torchOn && t) t.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); } catch (e) {}
       try { reader && reader.reset(); } catch (e) {}
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      const s = stream || video.srcObject;
+      if (s && s.getTracks) s.getTracks().forEach((t) => t.stop());
       wrap.remove();
       if (code && navigator.vibrate) navigator.vibrate(60);
       resolve(code || null);
     };
-    wrap.querySelector("button").onclick = () => finish(null);
+    wrap.querySelector(".cancel").onclick = () => finish(null);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       msg.textContent = "This browser can't use the camera. Type the number instead."; return;
@@ -47,6 +69,7 @@ export function scanBarcode() {
       if (native) {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 } }, audio: false });
         video.srcObject = stream; await video.play();
+        watchTorch();
         const tick = async () => {
           if (done) return;
           try { const r = await native.detect(video); if (r.length) return finish(r[0].rawValue); } catch (e) {}
@@ -59,6 +82,7 @@ export function scanBarcode() {
         const hints = new Map();
         hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.CODE_128]);
         reader = new ZXing.BrowserMultiFormatReader(hints, 150);
+        watchTorch(); // the camera stream appears on the video once ZXing starts it
         await reader.decodeFromConstraints({ video: { facingMode: "environment" }, audio: false }, video, (result) => { if (result) finish(result.getText()); });
       }
     } catch (e) {
