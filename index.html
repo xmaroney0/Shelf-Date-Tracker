@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shelf Date Tracker</title>
+<meta name="description" content="Log expiration dates as you stock and get a daily list of what to mark down or pull.">
+<meta name="theme-color" content="#1d5ea6">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Shelf Dates">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top"><div class="wrap"><div class="brand">Shelf Date Tracker</div><div class="sub" id="sub"></div></div></header>
+<main class="wrap" id="view"></main>
+<nav class="tabs" id="tabs" aria-label="Sections" hidden><div class="in">
+  <button class="tab" data-act="tab" data-tab="check"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg>Check<span class="badge" id="badge" hidden></span></button>
+  <button class="tab" data-act="tab" data-tab="stock"><svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8v8M10 8v8M13 8v8M16 8v8"/></svg>Stock</button>
+  <button class="tab" data-act="tab" data-tab="products"><svg viewBox="0 0 24 24"><path d="M8 3h8l1 4H7z"/><path d="M7 7h10v12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2z"/><path d="M7 12h10"/></svg>Products</button>
+  <button class="tab" data-act="tab" data-tab="results"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Results</button>
+  <button class="tab" data-act="tab" data-tab="store"><svg viewBox="0 0 24 24"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M3 9h18"/><path d="M10 20v-6h4v6"/></svg>Store</button>
+</div></nav>
+<div id="toast" role="status" hidden></div>
+<noscript><p class="wrap">Shelf Date Tracker needs JavaScript turned on.</p></noscript>
+<script type="module" src="app.js"></script>
+</body>
+</html>

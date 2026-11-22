@@ -1,0 +1,14 @@
+{
+  "name": "shelf-date-tracker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npx --yes serve@14.2.4 -l 5173 .",
+    "keys": "node notify/make-keys.mjs",
+    "alerts": "node notify/send.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.4",
+    "web-push": "3.6.7"
+  }
+}
