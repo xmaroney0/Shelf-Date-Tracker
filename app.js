@@ -5,7 +5,7 @@ import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
 // Bump this with every update (and VERSION in sw.js, and ?v= in index.html) so people can see which version they have.
-const APP_VERSION = "8";
+const APP_VERSION = "9";
 
 const S = {
   backend: null, session: null, screen: "loading", authMode: "signin", stores: [], store: null,
@@ -185,7 +185,7 @@ function batchCard(r, kind) {
   const bits = [whenText(dl), `${b.qty || 0} stocked`];
   if (!m.learning && est != null) bits.push(`about ${est} left`);
   const tag = kind === "pull" ? `<span class="tag pull">Pull</span>` : kind === "markdown" ? `<span class="tag markdown">Mark down</span>` : kind === "passed" ? `<span class="tag ok">Passed</span>` : b.status === "marked" ? `<span class="tag marked">Marked down</span>` : kind === "likely" ? `<span class="tag ok">Likely sold</span>` : "";
-  const takeOff = (alert) => `<button class="btn ${alert === "pull" ? "pull" : ""}" data-act="close" data-id="${b.id}" data-outcome="pulled" data-alert="${alert}">Taken off</button>`;
+  const takeOff = (alert) => `<button class="btn ${alert === "pull" ? "pull" : ""}" data-act="close" data-id="${b.id}" data-outcome="pulled" data-alert="${alert}">Pulled</button>`;
   const pass = `<button class="btn" data-act="pass" data-id="${b.id}">Pass</button>`;
   const sold = (alert) => `<button class="btn" data-act="close" data-id="${b.id}" data-outcome="gone" data-alert="${alert}">Already sold</button>`;
   let acts = "";
@@ -419,11 +419,11 @@ function resultsView() {
       <div class="stat"><div class="v">${Object.keys(S.products).length}</div><div class="l">Products tracked</div></div>
       <div class="stat"><div class="v">${restocks}</div><div class="l">Restocks logged</div></div>
       <div class="stat"><div class="v">${marked}</div><div class="l">Marked down before the date</div></div>
-      <div class="stat"><div class="v">${pulled}</div><div class="l">Taken off on time</div></div>
+      <div class="stat"><div class="v">${pulled}</div><div class="l">Pulled on time</div></div>
     </div>
     <section class="section"><h3>Were the alerts worth walking over?</h3><div class="card">`;
   if (checks) h += `<div class="bar" role="img" aria-label="${useful} useful checks, ${wasted} already sold"><span style="width:${(useful / checks) * 100}%;background:var(--ok)"></span><span style="width:${(wasted / checks) * 100}%;background:var(--pull)"></span></div>
-      <p><strong>${Math.round((useful / checks) * 100)}%</strong> of checks found product to mark down or take off. ${wasted} found it already sold.</p>`;
+      <p><strong>${Math.round((useful / checks) * 100)}%</strong> of checks found product to mark down or pull. ${wasted} found it already sold.</p>`;
   else h += `<p class="hint">Shows once people act on alerts from the Check tab.</p>`;
   h += `</div></section>
     <section class="section"><h3>Cleared without a check</h3><div class="stats">
@@ -574,7 +574,7 @@ function closeBatch(id, outcome, alert, via) {
   const b = S.batches.find((x) => x.id === id); if (!b) return;
   const m = models(S.batches)[b.upc] || emptyModel();
   const predicted = m.learning ? "learning" : m.likelySold.has(id) ? "sold" : "present";
-  return act(() => S.backend.updateBatch(S.store, id, { status: outcome, closedAt: Date.now(), closedVia: via || "check", alert: alert || null, predicted }), outcome === "pulled" ? "Marked as taken off" : "Marked as sold");
+  return act(() => S.backend.updateBatch(S.store, id, { status: outcome, closedAt: Date.now(), closedVia: via || "check", alert: alert || null, predicted }), outcome === "pulled" ? "Marked as pulled" : "Marked as sold");
 }
 
 /* ---------- push alerts ---------- */
