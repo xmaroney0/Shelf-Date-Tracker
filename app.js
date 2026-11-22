@@ -4,6 +4,9 @@ import { scanBarcode } from "./scanner.js";
 import * as importer from "./importer.js";
 import { DAY, analyze, models, emptyModel, isOpen, needsAction, addDays, daysBetween, dateCode, whenText, shortDate } from "./model.js";
 
+// Bump this with every update (and VERSION in sw.js, and ?v= in index.html) so people can see which version they have.
+const APP_VERSION = "7";
+
 const S = {
   backend: null, session: null, screen: "loading", authMode: "signin", stores: [], store: null,
   products: {}, batches: [], offlineSince: null, loaded: false,
@@ -281,7 +284,7 @@ function productsView() {
   const entries = Object.entries(S.products).sort((a, b) => (a[1].category || "").localeCompare(b[1].category || "") || a[1].name.localeCompare(b[1].name));
   let h = `<div class="prod-head"><h2>Products</h2>${canEditStore() ? `<button class="btn" data-act="imp-pick">Import item list</button>` : ""}</div>`;
   if (!entries.length) return h + `<div class="empty"><p><strong>No products yet.</strong></p><p class="hint">The first time anyone scans a UPC, they name it and it's saved here for the whole store.${canEditStore() ? " Or import your store's item list as a CSV or Excel file." : ""}</p></div>`;
-  h += `<p class="hint">${entries.length} products</p>`;
+  h += `<p class="hint">${entries.length} products · Tap one to rename or delete it.</p>`;
   h += catChips() + `<div class="list">`;
   for (const [u, p] of entries) {
     if (!inCat(p)) continue;
@@ -464,6 +467,8 @@ function storeView() {
       <button class="btn" data-act="add-store">Join or start another store</button>
       <button class="btn" data-act="signout">Sign out</button></div></section>`;
   }
+  h += `<section class="section"><h3>App</h3><div class="card"><div class="prod-head"><p>Version ${APP_VERSION}</p><button class="btn" data-act="reload-app">Reload app</button></div>
+      <p class="hint">If a new feature isn't showing up, tap Reload app. Everyone at your store should be on the same version.</p></div></section>`;
   return h;
 }
 
@@ -624,6 +629,15 @@ document.addEventListener("click", async (e) => {
   switch (a) {
     case "tab": return go(el.dataset.tab);
     case "reload": return location.reload();
+    case "reload-app": {
+      el.disabled = true; el.textContent = "Reloading…";
+      try {
+        const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : [];
+        await Promise.all(regs.map((r) => r.update().catch(() => {})));
+        if (window.caches) { const keys = await caches.keys(); await Promise.all(keys.map((k) => caches.delete(k))); }
+      } catch (err) {}
+      return location.reload();
+    }
     case "demo": return startDemo();
     case "auth-mode": S.authMode = S.authMode === "signup" ? "signin" : "signup"; S.fresh = true; return render();
     case "join": {

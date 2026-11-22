@@ -1,6 +1,6 @@
 // Service worker: lets the app open without signal and shows daily alerts.
 // Change VERSION whenever you upload new app files so phones pick them up.
-const VERSION = "sdt-v6";
+const VERSION = "sdt-v7";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./data.js", "./model.js", "./scanner.js", "./importer.js", "./config.js", "./manifest.webmanifest", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -10,14 +10,15 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
-// App files: try the network first so updates show up, fall back to the saved copy offline.
+// App files: always ask the server for the newest copy (no-cache skips the phone's
+// 10-minute browser cache), and fall back to the saved copy when there's no signal.
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request.url, { cache: "no-cache", credentials: "same-origin" })
       .then((res) => { const copy = res.clone(); caches.open(VERSION).then((c) => c.put(e.request, copy)); return res; })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match("./index.html")))
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match("./index.html")))
   );
 });
 
