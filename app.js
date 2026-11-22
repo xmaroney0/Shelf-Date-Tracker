@@ -231,8 +231,9 @@ function stockView() {
     return `<h2>New product</h2>
       <div class="card">
         <p class="hint">UPC <span class="upc">${esc(f.upc)}</span> isn't saved yet. Name it once and everyone at your store gets it.</p>
-        <div class="field"><label for="np-name">Name</label><input id="np-name" placeholder="e.g. 2% Milk, Gallon" autocomplete="off"></div>
-        <div class="field"><label for="np-cat">Category</label><input id="np-cat" list="cats" value="${esc(defCat)}" autocomplete="off"><datalist id="cats">${["Milk", "Yogurt", "Cheese", "Eggs", "Butter", "Cream", "Juice", ...cats].filter((v, i, a) => a.indexOf(v) === i).map((c) => `<option value="${esc(c)}">`).join("")}</datalist></div>
+        <p class="lookup ${f.lookup || ""}" id="lookup-msg">${lookupText(f)}</p>
+        <div class="field"><label for="np-name">Name</label><input id="np-name" placeholder="e.g. 2% Milk, Gallon" autocomplete="off" value="${esc(f.suggest?.name || "")}"></div>
+        <div class="field"><label for="np-cat">Category</label><input id="np-cat" list="cats" value="${esc(f.suggest?.category || defCat)}" autocomplete="off"><datalist id="cats">${["Milk", "Yogurt", "Cheese", "Eggs", "Butter", "Cream", "Juice", ...cats].filter((v, i, a) => a.indexOf(v) === i).map((c) => `<option value="${esc(c)}">`).join("")}</datalist></div>
         <div class="field"><label for="np-days">Typical days until expiration when stocked</label><input id="np-days" type="number" inputmode="numeric" min="1" max="365" value="14"></div>
         <div class="row"><button class="btn" data-act="cancel">Cancel</button><button class="btn primary grow" data-act="new-save">Save product</button></div>
       </div>`;
@@ -361,9 +362,69 @@ function startUpc(raw) {
   const upc = normUpc(raw);
   if (upc.length < 6) { toast("That doesn't look like a UPC. Check the number."); return; }
   S.flow = { step: S.products[upc] ? "form" : "new", upc };
+  if (S.flow.step === "new") S.flow.lookup = "loading";
   S.fresh = true; render();
-  if (S.flow.step === "new") $("#np-name")?.focus();
+  if (S.flow.step === "new") fillFromLookup(S.flow);
 }
+
+/* ---------- product lookup (Open Food Facts, a free public grocery database) ---------- */
+function lookupText(f) {
+  if (f.lookup === "loading") return "Looking up this barcode…";
+  if (f.lookup === "found") return "Name found in a public product database. Check it and fix anything that's off.";
+  if (f.lookup === "none") return "Not found in the public product database. Type the name below.";
+  return "";
+}
+const CATEGORY_TAGS = [
+  ["Milk", ["en:milks", "en:plant-based-milks", "en:flavoured-milks", "en:dairy-drinks", "en:milk-substitutes"]],
+  ["Yogurt", ["en:yogurts", "en:fermented-milk-products", "en:kefir"]],
+  ["Cheese", ["en:cheeses"]],
+  ["Eggs", ["en:eggs", "en:chicken-eggs"]],
+  ["Butter", ["en:butters", "en:margarines"]],
+  ["Cream", ["en:creams", "en:sour-creams", "en:coffee-creamers", "en:creamers", "en:whipped-creams"]],
+  ["Juice", ["en:juices", "en:fruit-juices", "en:orange-juices"]],
+];
+function guessCategory(tags) {
+  for (const [cat, list] of CATEGORY_TAGS) if (tags.some((t) => list.includes(t))) return cat;
+  return null;
+}
+async function lookupUpc(upc) {
+  const codes = upc.length === 12 ? [upc, "0" + upc] : [upc];
+  for (const c of codes) {
+    try {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 5000);
+      const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${c}.json?fields=product_name,product_name_en,brands,quantity,categories_tags`, { signal: ctl.signal });
+      clearTimeout(t);
+      if (!r.ok) continue;
+      const j = await r.json();
+      const p = j && j.status === 1 && j.product;
+      if (!p) continue;
+      const title = (p.product_name_en || p.product_name || "").trim();
+      const brand = (p.brands || "").split(",")[0].trim();
+      const qty = (p.quantity || "").replace(/\s+e$/, "").trim();
+      const parts = [];
+      if (brand && !title.toLowerCase().includes(brand.toLowerCase())) parts.push(brand);
+      if (title) parts.push(title);
+      if (qty && !title.toLowerCase().includes(qty.toLowerCase())) parts.push(qty);
+      const name = parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 80);
+      if (name) return { name, category: guessCategory(p.categories_tags || []) };
+    } catch (e) { /* offline or slow: fall through */ }
+  }
+  return null;
+}
+async function fillFromLookup(f) {
+  const hit = await lookupUpc(f.upc);
+  if (S.flow !== f || f.step !== "new") return; // user moved on
+  f.lookup = hit ? "found" : "none";
+  if (hit) f.suggest = hit;
+  const msg = $("#lookup-msg");
+  if (msg) { msg.textContent = lookupText(f); msg.className = "lookup " + f.lookup; }
+  const nameEl = $("#np-name"), catEl = $("#np-cat");
+  if (hit && nameEl && !nameEl.value.trim()) nameEl.value = hit.name;
+  if (hit && hit.category && catEl && !catEl.dataset.touched) catEl.value = hit.category;
+  if (nameEl && !hit) nameEl.focus();
+}
+document.addEventListener("input", (e) => { if (e.target.id === "np-cat") e.target.dataset.touched = "1"; });
 async function saveNew() {
   const name = $("#np-name").value.trim();
   if (!name) return toast("Give the product a name.");
