@@ -40,13 +40,16 @@ for (const st of stores) {
   }));
   const rows = analyze({ batches, products, settings: { markdownDays: st.markdown_days, pullDays: st.pull_days }, today: date }).rows.filter(needsAction);
   const pull = rows.filter((r) => r.level === "pull"), mark = rows.filter((r) => r.level === "markdown");
-  if (!rows.length) { console.log(`${st.name}: nothing to check`); continue; }
+  if (!rows.length && !force) { console.log(`${st.name}: nothing to check`); continue; }
 
   const parts = [];
   if (pull.length) parts.push(`${pull.length} to pull`);
   if (mark.length) parts.push(`${mark.length} to mark down`);
   const names = rows.slice(0, 3).map((r) => r.p.name).join(", ") + (rows.length > 3 ? ` and ${rows.length - 3} more` : "");
-  const payload = JSON.stringify({ title: `${st.name}: ${parts.join(", ")}`, body: names, url: "./" });
+  // A test run ("Send now") always sends, so you can check alerts reach your phone.
+  const payload = rows.length
+    ? JSON.stringify({ title: `${st.name}: ${parts.join(", ")}`, body: names, url: "./" })
+    : JSON.stringify({ title: `${st.name}: test alert`, body: "Alerts are working. Nothing needs checking right now.", url: "./" });
 
   for (const s of subs) {
     try {
